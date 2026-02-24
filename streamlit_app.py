@@ -197,7 +197,9 @@ map_col, panel_col = st.columns([1.25, 1.0], gap="large")
 # MAP: Density Choropleth (click countries)
 # -----------------------
 with map_col:
-    # Choropleth density map
+    # =====================
+    # 1. Base choropleth (DENSITY)
+    # =====================
     fig_map = px.choropleth(
         country_density,
         locations="country",
@@ -207,20 +209,49 @@ with map_col:
         hover_data={"emissions": ":,.0f", "log_emissions": False},
         labels={"log_emissions": "Emissions intensity (log10)"},
         color_continuous_scale="YlOrRd",
-        title="Country density (log scale) — total emissions involvement (origin + destination)",
     )
+
+    # =====================
+    # 2. Invisible scatter layer (CLICK HANDLER)
+    # =====================
+    click_df = country_density.copy()
+
+    fig_scatter = px.scatter_geo(
+        click_df,
+        locations="country",
+        locationmode="country names",
+        hover_name="country",
+        custom_data=["country"],
+    )
+
+    # make scatter invisible but clickable
+    fig_scatter.update_traces(
+        marker=dict(size=18, opacity=0),
+        showlegend=False
+    )
+
+    # =====================
+    # 3. Merge layers
+    # =====================
+    for tr in fig_scatter.data:
+        fig_map.add_trace(tr)
+
     fig_map.update_layout(
         height=560,
-        margin=dict(l=10, r=10, t=50, b=10),
+        margin=dict(l=10, r=10, t=10, b=10),
+        clickmode="event+select",  # IMPORTANT
         coloraxis_colorbar=dict(title="tCO₂ (log10)"),
     )
+
     fig_map.update_geos(
         showcountries=True,
         showcoastlines=True,
         projection_type="natural earth",
     )
 
-    # Native Streamlit selection
+    # =====================
+    # 4. Native Streamlit select
+    # =====================
     event = st.plotly_chart(
         fig_map,
         use_container_width=True,
@@ -228,25 +259,30 @@ with map_col:
         selection_mode="points",
     )
 
+    # =====================
+    # 5. A / B logic
+    # =====================
     if event and event.get("selection") and event["selection"].get("points"):
-        # choropleth selection provides location
-        country_clicked = event["selection"]["points"][0].get("location")
+        p = event["selection"]["points"][0]
+        loc = p.get("customdata", [None])[0]
 
-        if country_clicked:
+        if loc:
             if st.session_state.A is None:
-                st.session_state.A = country_clicked
+                st.session_state.A = loc
                 st.rerun()
             elif st.session_state.B is None:
-                if country_clicked != st.session_state.A:
-                    st.session_state.B = country_clicked
+                if loc != st.session_state.A:
+                    st.session_state.B = loc
                     st.rerun()
             else:
-                st.session_state.A = country_clicked
+                st.session_state.A = loc
                 st.session_state.B = None
                 st.rerun()
 
-    st.markdown(f"**Selected:** A = `{st.session_state.A or '—'}` | B = `{st.session_state.B or '—'}`")
-
+    st.markdown(
+        f"**Selected:** A = `{st.session_state.A or '—'}` | "
+        f"B = `{st.session_state.B or '—'}`"
+    )
 # -----------------------
 # PANEL: Pair details + shares + donut
 # -----------------------
