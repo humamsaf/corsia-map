@@ -3,311 +3,172 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="CORSIA Dashboard", layout="wide")
+st.set_page_config(page_title="CORSIA State-Pair Dashboard", layout="wide")
 
-# -----------------------
-# Files (must exist in same folder as app)
-# -----------------------
+# =====================
+# FILES
+# =====================
 BASELINE_XLSX = "2019_2020_CO2_StatePairs_table_Nov2021.xlsx"
 CURRENT_XLSX  = "2024_CO2_StatePairs_table.xlsx"
-ATTR_XLSX     = "CORSIA_AO_to_State_Attributions_10ed_web-2_extracted.xlsx"
 
-# -----------------------
-# Helpers
-# -----------------------
+# =====================
+# HELPERS
+# =====================
 def clean_num(x):
-    if pd.isna(x):
-        return np.nan
-    s = str(x).strip()
-    if s in {"-", "—", "", "nan", "NaN"}:
-        return np.nan
-    s = s.replace(",", "").replace("*", "")
-    try:
-        return float(s)
-    except Exception:
-        return np.nan
+    if pd.isna(x): return np.nan
+    s = str(x).strip().replace(",", "").replace("*", "")
+    if s in {"", "-", "—"}: return np.nan
+    try: return float(s)
+    except: return np.nan
 
-def split_pair(val: str, delim: str):
-    if pd.isna(val):
-        return (None, None)
-    s = str(val).strip()
-    parts = s.split(delim)
-    if len(parts) != 2:
-        return (s, None)
-    return parts[0].strip(), parts[1].strip()
+def split_pair(val, delim):
+    if pd.isna(val): return (None, None)
+    p = str(val).split(delim)
+    return (p[0].strip(), p[1].strip()) if len(p) == 2 else (p[0], None)
 
 def fmt_int(x):
-    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
-        return "—"
-    try:
-        return f"{int(round(float(x))):,}"
-    except Exception:
-        return "—"
+    return "—" if pd.isna(x) else f"{int(round(x)):,}"
 
 def fmt_pct(x):
-    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
-        return "—"
-    return f"{float(x):+.1f}%"
+    return "—" if pd.isna(x) else f"{x:.2f}%"
 
-def require_file(path: str):
-    import os
-    if not os.path.exists(path):
-        st.error(f"File not found: `{path}`. Pastikan file ada di folder app.")
-        st.stop()
-
-# -----------------------
-# Loaders
-# -----------------------
+# =====================
+# LOAD DATA
+# =====================
 @st.cache_data
-def load_baseline_2019(path: str):
-    raw = pd.read_excel(path, sheet_name=0, header=None)
-
-    idx = raw.index[raw[0].astype(str).str.contains("Afghanistan", na=False)]
-    if len(idx) == 0:
-        raise ValueError("Baseline file: tidak menemukan baris awal 'Afghanistan'.")
-    start_idx = idx[0]
-
-    data = raw.iloc[start_idx:].copy()
-    data.columns = ["state_pair", "pilot_2019", "avg_2019_2020"]
-
-    data["emissions_tco2"] = data["pilot_2019"].apply(clean_num)
-    data[["origin", "dest"]] = data["state_pair"].apply(lambda x: pd.Series(split_pair(x, "-")))
-
-    out = data[["origin", "dest", "emissions_tco2"]].dropna(subset=["origin", "dest"]).copy()
-    out["year"] = 2019
-    return out
+def load_baseline():
+    raw = pd.read_excel(BASELINE_XLSX, header=None)
+    i = raw.index[raw[0].astype(str).str.contains("Afghanistan")][0]
+    d = raw.iloc[i:].copy()
+    d.columns = ["pair","v","_"]
+    d["emissions"] = d["v"].apply(clean_num)
+    d[["o","d"]] = d["pair"].apply(lambda x: pd.Series(split_pair(x, "-")))
+    return d[["o","d","emissions"]].dropna()
 
 @st.cache_data
-def load_current_2024(path: str):
-    raw = pd.read_excel(path, sheet_name=0, header=None)
+def load_current():
+    raw = pd.read_excel(CURRENT_XLSX, header=None)
+    i = raw.index[raw[0].astype(str).str.contains("Afghanistan")][0]
+    d = raw.iloc[i:].copy()
+    d.columns = ["pair","sub","nsub"]
+    d["sub"] = d["sub"].apply(clean_num)
+    d["nsub"] = d["nsub"].apply(clean_num)
+    d[["o","d"]] = d["pair"].apply(lambda x: pd.Series(split_pair(x, "/")))
 
-    idx = raw.index[raw[0].astype(str).str.contains("Afghanistan", na=False)]
-    if len(idx) == 0:
-        raise ValueError("Current 2024 file: tidak menemukan baris awal 'Afghanistan'.")
-    start_idx = idx[0]
+    rows=[]
+    for _,r in d.iterrows():
+        if pd.notna(r["sub"]): rows.append((r["o"],r["d"],r["sub"],True))
+        if pd.notna(r["nsub"]): rows.append((r["o"],r["d"],r["nsub"],False))
+    return pd.DataFrame(rows,columns=["o","d","emissions","subject"])
 
-    data = raw.iloc[start_idx:].copy()
-    data.columns = ["state_pair", "subject_tco2", "not_subject_tco2"]
+baseline = load_baseline()
+current  = load_current()
 
-    data["subject_tco2"] = data["subject_tco2"].apply(clean_num)
-    data["not_subject_tco2"] = data["not_subject_tco2"].apply(clean_num)
-    data[["origin", "dest"]] = data["state_pair"].apply(lambda x: pd.Series(split_pair(x, "/")))
+# =====================
+# SESSION STATE
+# =====================
+if "A" not in st.session_state: st.session_state.A=None
+if "B" not in st.session_state: st.session_state.B=None
 
-    rows = []
-    for _, r in data.iterrows():
-        if pd.notna(r["origin"]) and pd.notna(r["dest"]):
-            if pd.notna(r["subject_tco2"]):
-                rows.append((r["origin"], r["dest"], 2024, float(r["subject_tco2"]), True))
-            if pd.notna(r["not_subject_tco2"]):
-                rows.append((r["origin"], r["dest"], 2024, float(r["not_subject_tco2"]), False))
+# =====================
+# TOTALS (GLOBAL CONTEXT)
+# =====================
+GLOBAL_TOTAL = current["emissions"].sum()
+GLOBAL_SUBJECT_TOTAL = current.loc[current["subject"],"emissions"].sum()
 
-    return pd.DataFrame(rows, columns=["origin", "dest", "year", "emissions_tco2", "is_subject"])
+# =====================
+# UI
+# =====================
+st.title("CORSIA State-Pair Emissions Dashboard")
+st.caption("Absolute emissions with global and CORSIA-subject context")
 
-@st.cache_data
-def load_attribution(path: str):
-    try:
-        df = pd.read_excel(path, sheet_name="Attributions")
-    except Exception:
-        return pd.DataFrame()
+countries = sorted(set(current["o"]).union(set(current["d"])))
 
-    rename_map = {
-        "State": "state",
-        "Aeroplane Operator Name": "operator_name",
-        "Attribution Method": "attribution_method",
-        "Identifier": "identifier",
-    }
-    return df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+map_col, panel_col = st.columns([1.2,1])
 
-# -----------------------
-# Session state
-# -----------------------
-if "A" not in st.session_state:
-    st.session_state.A = None
-if "B" not in st.session_state:
-    st.session_state.B = None
-
-def reset_ab():
-    st.session_state.A = None
-    st.session_state.B = None
-
-# -----------------------
-# App
-# -----------------------
-require_file(BASELINE_XLSX)
-require_file(CURRENT_XLSX)
-require_file(ATTR_XLSX)
-
-try:
-    baseline = load_baseline_2019(BASELINE_XLSX)
-    current  = load_current_2024(CURRENT_XLSX)
-    attrib   = load_attribution(ATTR_XLSX)
-except Exception as e:
-    st.error(f"Gagal load data: {e}")
-    st.stop()
-
-st.sidebar.header("Controls")
-baseline_mode = st.sidebar.radio("Baseline", ["2019", "85% of 2019"], index=0)
-baseline_mult = 0.85 if baseline_mode.startswith("85") else 1.0
-if st.sidebar.button("Reset A/B"):
-    reset_ab()
-
-countries = sorted(set(current["origin"]).union(set(current["dest"])))
-
-st.title("CORSIA State-Pair Dashboard")
-st.caption("Klik negara pertama = pilih Origin (A). Klik negara kedua = pilih Destination (B).")
-
-# OPTIONAL: show Streamlit version (helpful for debugging)
-# st.write("Streamlit version:", st.__version__)
-
-map_col, panel_col = st.columns([1.25, 1.0], gap="large")
-
-# -----------------------
-# MAP (native select)
-# -----------------------
+# =====================
+# MAP
+# =====================
 with map_col:
-    pin_df = pd.DataFrame({"country": countries})
-
-    def role(c):
-        if st.session_state.A == c:
-            return "A"
-        if st.session_state.B == c:
-            return "B"
-        return "Other"
-
-    pin_df["role"] = pin_df["country"].apply(role)
-
-    fig_map = px.scatter_geo(
-        pin_df,
-        locations="country",
-        locationmode="country names",
-        hover_name="country",
-        color="role",
-        custom_data=["country"],
-    )
-    fig_map.update_layout(height=560, margin=dict(l=10, r=10, t=10, b=10), legend_title_text="role")
-    fig_map.update_geos(
-        showcountries=True,
-        showcoastlines=True,
-        showland=True,
-        landcolor="rgba(200,200,200,0.25)",
-        projection_type="natural earth",
+    dfm = pd.DataFrame({"country":countries})
+    dfm["role"] = dfm["country"].apply(
+        lambda c: "A" if c==st.session_state.A else "B" if c==st.session_state.B else "Other"
     )
 
-    event = st.plotly_chart(
-        fig_map,
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="points",
+    fig = px.scatter_geo(
+        dfm, locations="country", locationmode="country names",
+        color="role", hover_name="country", custom_data=["country"]
     )
+    fig.update_traces(marker=dict(size=7))
+    fig.update_layout(height=560, margin=dict(l=10,r=10,t=10,b=10))
 
-    # Selection logic (A then B; third click resets to new A)
-    if event and event.get("selection") and event["selection"].get("points"):
-        p = event["selection"]["points"][0]
-        loc = None
+    ev = st.plotly_chart(fig, on_select="rerun", selection_mode="points")
 
-        # customdata should exist because we set custom_data=["country"]
-        cd = p.get("customdata")
-        if isinstance(cd, (list, tuple)) and len(cd) > 0:
-            loc = cd[0]
+    if ev and ev["selection"]["points"]:
+        c = ev["selection"]["points"][0]["customdata"][0]
+        if st.session_state.A is None:
+            st.session_state.A=c
+        elif st.session_state.B is None and c!=st.session_state.A:
+            st.session_state.B=c
+        else:
+            st.session_state.A=c
+            st.session_state.B=None
+        st.rerun()
 
-        if loc:
-            if st.session_state.A is None:
-                st.session_state.A = loc
-                st.rerun()
-            elif st.session_state.B is None:
-                if loc != st.session_state.A:
-                    st.session_state.B = loc
-                    st.rerun()
-            else:
-                st.session_state.A = loc
-                st.session_state.B = None
-                st.rerun()
+    st.markdown(f"**Selected:** {st.session_state.A or '—'} → {st.session_state.B or '—'}")
 
-    st.markdown(f"**Selected:** A = `{st.session_state.A or '—'}` | B = `{st.session_state.B or '—'}`")
-
-# -----------------------
-# DETAIL PANEL
-# -----------------------
+# =====================
+# PANEL
+# =====================
 with panel_col:
-    st.subheader("Detail Panel")
-    A, B = st.session_state.A, st.session_state.B
-
-    if not A or not B:
-        st.info("Klik dua negara di map untuk melihat detail pair.")
+    if not st.session_state.A or not st.session_state.B:
+        st.info("Klik dua negara pada peta")
         st.stop()
 
-    pair_cur  = current[(current["origin"] == A) & (current["dest"] == B)]
-    pair_base = baseline[(baseline["origin"] == A) & (baseline["dest"] == B)]
+    A,B = st.session_state.A, st.session_state.B
+    sel = current[(current["o"]==A)&(current["d"]==B)]
 
-    current_total = float(pair_cur["emissions_tco2"].sum()) if not pair_cur.empty else np.nan
-    baseline_2019 = float(pair_base["emissions_tco2"].sum()) if not pair_base.empty else np.nan
-    baseline_used = baseline_2019 * baseline_mult if pd.notna(baseline_2019) else np.nan
+    total = sel["emissions"].sum()
+    subject = sel.loc[sel["subject"],"emissions"].sum()
+    nsubject = total-subject
 
-    growth_abs = current_total - baseline_used if pd.notna(current_total) and pd.notna(baseline_used) else np.nan
-    growth_pct = (growth_abs / baseline_used * 100) if pd.notna(baseline_used) and baseline_used > 0 else np.nan
+    share_global = total/GLOBAL_TOTAL*100
+    share_subject = subject/GLOBAL_SUBJECT_TOTAL*100 if subject>0 else np.nan
 
-    subject = float(pair_cur.loc[pair_cur["is_subject"] == True, "emissions_tco2"].sum()) if not pair_cur.empty else 0.0
-    not_subject = float(pair_cur.loc[pair_cur["is_subject"] == False, "emissions_tco2"].sum()) if not pair_cur.empty else 0.0
-    total = subject + not_subject
-    subject_share = (subject / total * 100) if total > 0 else np.nan
+    # ---- CONTEXT LINE
+    st.caption("Share of total international aviation emissions (2024)")
 
-    st.markdown(f"### {A} → {B}")
+    # ---- KPI ROW
+    k1,k2,k3,k4 = st.columns(4)
+    k1.metric("Pair emissions", fmt_int(total)+" tCO₂")
+    k2.metric("Share of global total", fmt_pct(share_global))
+    k3.metric("Share of CORSIA-subject", fmt_pct(share_subject))
+    k4.metric("Subject share", fmt_pct(subject/total*100 if total>0 else np.nan))
 
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Current total (2024) tCO₂", fmt_int(current_total))
-    k2.metric(f"Baseline ({baseline_mode}) tCO₂", fmt_int(baseline_used))
-    k3.metric("Growth vs baseline", fmt_int(growth_abs), fmt_pct(growth_pct))
-
-    st.divider()
-
-    fig1 = px.bar(
-        pd.DataFrame(
-            {"Scenario": [f"Baseline {baseline_mode}", "Current 2024"],
-             "Emissions (tCO₂)": [baseline_used, current_total]}
-        ),
-        x="Scenario",
-        y="Emissions (tCO₂)",
-        text_auto=True,
-        title="Current vs Baseline",
+    # ---- DONUT
+    fig_donut = px.pie(
+        names=["Selected pair","Rest of world"],
+        values=[total, GLOBAL_TOTAL-total],
+        hole=0.6,
+        title="Contribution to global emissions (2024)"
     )
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig_donut, use_container_width=True)
 
-    fig2 = px.bar(
-        pd.DataFrame(
-            {"Row": ["Total", "Total"],
-             "Category": ["Subject", "Not subject"],
-             "Emissions (tCO₂)": [subject, not_subject]}
-        ),
-        x="Emissions (tCO₂)",
-        y="Row",
-        color="Category",
-        orientation="h",
-        text_auto=True,
-        title=f"Subject vs Not subject — 2024 (Subject share: {fmt_pct(subject_share).replace('+','')})",
+    # ---- EXISTING CHARTS
+    fig_bar = px.bar(
+        pd.DataFrame({
+            "Category":["Subject","Not subject"],
+            "Emissions":[subject,nsubject]
+        }),
+        x="Category",y="Emissions",
+        title="Subject vs not subject emissions"
     )
-    fig2.update_layout(yaxis_title="")
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig_bar, use_container_width=True)
 
-    tabs = st.tabs(["Attribution (context)", "Notes"])
-
-    with tabs[0]:
-        if attrib.empty:
-            st.info("Attribution file loaded but sheet/columns may differ. (Optional layer)")
-        else:
-            if "state" in attrib.columns:
-                st.markdown(f"**Operators attributed to {A}**")
-                st.dataframe(attrib[attrib["state"] == A].head(200), use_container_width=True, height=220)
-
-                st.markdown(f"**Operators attributed to {B}**")
-                st.dataframe(attrib[attrib["state"] == B].head(200), use_container_width=True, height=220)
-            else:
-                st.dataframe(attrib.head(200), use_container_width=True)
-
-    with tabs[1]:
-        st.markdown(
-            """
-- Map = selector (navigator). Angka & grafik ada di panel kanan.
-- Baseline dari “Pilot phase – based on 2019 data”.
-- Current 2024 dipisah subject vs not subject.
-            """
-        )
+    st.markdown(
+        f"""
+**Interpretation:**  
+The state-pair **{A} → {B}** accounts for **{fmt_pct(share_global)}** of total global international aviation CO₂
+emissions in 2024, of which **{fmt_pct(subject/total*100 if total>0 else np.nan)}** are subject to CORSIA.
+"""
+    )
