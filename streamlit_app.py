@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from streamlit_plotly_events import plotly_events
 
 st.set_page_config(page_title="CORSIA Dashboard", layout="wide")
 
 # -----------------------
-# Files
+# Files (must exist in same folder as app)
 # -----------------------
 BASELINE_XLSX = "2019_2020_CO2_StatePairs_table_Nov2021.xlsx"
 CURRENT_XLSX  = "2024_CO2_StatePairs_table.xlsx"
@@ -50,8 +49,7 @@ def fmt_pct(x):
         return "—"
     return f"{float(x):+.1f}%"
 
-def file_guard(path: str):
-    """Hard fail early with a clear message if file not found."""
+def require_file(path: str):
     import os
     if not os.path.exists(path):
         st.error(f"File not found: `{path}`. Pastikan file ada di folder app.")
@@ -64,10 +62,9 @@ def file_guard(path: str):
 def load_baseline_2019(path: str):
     raw = pd.read_excel(path, sheet_name=0, header=None)
 
-    # find first row where column 0 contains "Afghanistan"
     idx = raw.index[raw[0].astype(str).str.contains("Afghanistan", na=False)]
     if len(idx) == 0:
-        raise ValueError("Tidak menemukan baris awal 'Afghanistan' pada baseline file.")
+        raise ValueError("Baseline file: tidak menemukan baris awal 'Afghanistan'.")
     start_idx = idx[0]
 
     data = raw.iloc[start_idx:].copy()
@@ -86,7 +83,7 @@ def load_current_2024(path: str):
 
     idx = raw.index[raw[0].astype(str).str.contains("Afghanistan", na=False)]
     if len(idx) == 0:
-        raise ValueError("Tidak menemukan baris awal 'Afghanistan' pada current 2024 file.")
+        raise ValueError("Current 2024 file: tidak menemukan baris awal 'Afghanistan'.")
     start_idx = idx[0]
 
     data = raw.iloc[start_idx:].copy()
@@ -104,8 +101,7 @@ def load_current_2024(path: str):
             if pd.notna(r["not_subject_tco2"]):
                 rows.append((r["origin"], r["dest"], 2024, float(r["not_subject_tco2"]), False))
 
-    df = pd.DataFrame(rows, columns=["origin", "dest", "year", "emissions_tco2", "is_subject"])
-    return df
+    return pd.DataFrame(rows, columns=["origin", "dest", "year", "emissions_tco2", "is_subject"])
 
 @st.cache_data
 def load_attribution(path: str):
@@ -134,39 +130,12 @@ def reset_ab():
     st.session_state.A = None
     st.session_state.B = None
 
-def pick_country(clicked_point: dict):
-    """
-    Robust extraction of clicked country from plotly_events payload.
-    Priority:
-      1) customdata[0] (we set custom_data=["country"])
-      2) hovertext
-      3) text
-      4) location (rarely present in scatter_geo)
-    """
-    cd = clicked_point.get("customdata")
-    if isinstance(cd, (list, tuple)) and len(cd) > 0 and cd[0]:
-        return cd[0]
-
-    ht = clicked_point.get("hovertext")
-    if ht:
-        return ht
-
-    tx = clicked_point.get("text")
-    if tx:
-        return tx
-
-    loc = clicked_point.get("location")
-    if loc:
-        return loc
-
-    return None
-
 # -----------------------
-# App start
+# App
 # -----------------------
-file_guard(BASELINE_XLSX)
-file_guard(CURRENT_XLSX)
-file_guard(ATTR_XLSX)
+require_file(BASELINE_XLSX)
+require_file(CURRENT_XLSX)
+require_file(ATTR_XLSX)
 
 try:
     baseline = load_baseline_2019(BASELINE_XLSX)
@@ -179,20 +148,21 @@ except Exception as e:
 st.sidebar.header("Controls")
 baseline_mode = st.sidebar.radio("Baseline", ["2019", "85% of 2019"], index=0)
 baseline_mult = 0.85 if baseline_mode.startswith("85") else 1.0
-
 if st.sidebar.button("Reset A/B"):
     reset_ab()
 
-# countries list
 countries = sorted(set(current["origin"]).union(set(current["dest"])))
 
 st.title("CORSIA State-Pair Dashboard")
 st.caption("Klik negara pertama = pilih Origin (A). Klik negara kedua = pilih Destination (B).")
 
+# OPTIONAL: show Streamlit version (helpful for debugging)
+# st.write("Streamlit version:", st.__version__)
+
 map_col, panel_col = st.columns([1.25, 1.0], gap="large")
 
 # -----------------------
-# MAP + CLICK LOGIC
+# MAP (native select)
 # -----------------------
 with map_col:
     pin_df = pd.DataFrame({"country": countries})
@@ -212,37 +182,33 @@ with map_col:
         locationmode="country names",
         hover_name="country",
         color="role",
-        custom_data=["country"],  # IMPORTANT: stable click extraction
+        custom_data=["country"],
     )
-
-    fig_map.update_layout(
-        height=560,
-        margin=dict(l=10, r=10, t=10, b=10),
-        legend_title_text="role",
-    )
-
-    # optional: make the basemap clearer (especially in dark theme)
+    fig_map.update_layout(height=560, margin=dict(l=10, r=10, t=10, b=10), legend_title_text="role")
     fig_map.update_geos(
         showcountries=True,
         showcoastlines=True,
         showland=True,
-        landcolor="rgba(200,200,200,0.18)",
-        showocean=True,
-        oceancolor="rgba(0,0,0,0)",
+        landcolor="rgba(200,200,200,0.25)",
         projection_type="natural earth",
     )
 
-    clicked = plotly_events(
+    event = st.plotly_chart(
         fig_map,
-        click_event=True,
-        hover_event=False,
-        select_event=False,
-        key="map_click_evt",
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="points",
     )
 
-    # Click to set A/B
-    if clicked:
-        loc = pick_country(clicked[0])
+    # Selection logic (A then B; third click resets to new A)
+    if event and event.get("selection") and event["selection"].get("points"):
+        p = event["selection"]["points"][0]
+        loc = None
+
+        # customdata should exist because we set custom_data=["country"]
+        cd = p.get("customdata")
+        if isinstance(cd, (list, tuple)) and len(cd) > 0:
+            loc = cd[0]
 
         if loc:
             if st.session_state.A is None:
@@ -253,7 +219,6 @@ with map_col:
                     st.session_state.B = loc
                     st.rerun()
             else:
-                # third click resets to new A and clears B
                 st.session_state.A = loc
                 st.session_state.B = None
                 st.rerun()
@@ -265,13 +230,13 @@ with map_col:
 # -----------------------
 with panel_col:
     st.subheader("Detail Panel")
-
     A, B = st.session_state.A, st.session_state.B
+
     if not A or not B:
         st.info("Klik dua negara di map untuk melihat detail pair.")
         st.stop()
 
-    pair_cur = current[(current["origin"] == A) & (current["dest"] == B)]
+    pair_cur  = current[(current["origin"] == A) & (current["dest"] == B)]
     pair_base = baseline[(baseline["origin"] == A) & (baseline["dest"] == B)]
 
     current_total = float(pair_cur["emissions_tco2"].sum()) if not pair_cur.empty else np.nan
@@ -297,10 +262,8 @@ with panel_col:
 
     fig1 = px.bar(
         pd.DataFrame(
-            {
-                "Scenario": [f"Baseline {baseline_mode}", "Current 2024"],
-                "Emissions (tCO₂)": [baseline_used, current_total],
-            }
+            {"Scenario": [f"Baseline {baseline_mode}", "Current 2024"],
+             "Emissions (tCO₂)": [baseline_used, current_total]}
         ),
         x="Scenario",
         y="Emissions (tCO₂)",
@@ -311,11 +274,9 @@ with panel_col:
 
     fig2 = px.bar(
         pd.DataFrame(
-            {
-                "Row": ["Total", "Total"],
-                "Category": ["Subject", "Not subject"],
-                "Emissions (tCO₂)": [subject, not_subject],
-            }
+            {"Row": ["Total", "Total"],
+             "Category": ["Subject", "Not subject"],
+             "Emissions (tCO₂)": [subject, not_subject]}
         ),
         x="Emissions (tCO₂)",
         y="Row",
@@ -335,17 +296,10 @@ with panel_col:
         else:
             if "state" in attrib.columns:
                 st.markdown(f"**Operators attributed to {A}**")
-                st.dataframe(
-                    attrib[attrib["state"] == A].head(200),
-                    use_container_width=True,
-                    height=220,
-                )
+                st.dataframe(attrib[attrib["state"] == A].head(200), use_container_width=True, height=220)
+
                 st.markdown(f"**Operators attributed to {B}**")
-                st.dataframe(
-                    attrib[attrib["state"] == B].head(200),
-                    use_container_width=True,
-                    height=220,
-                )
+                st.dataframe(attrib[attrib["state"] == B].head(200), use_container_width=True, height=220)
             else:
                 st.dataframe(attrib.head(200), use_container_width=True)
 
