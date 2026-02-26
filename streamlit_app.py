@@ -594,13 +594,14 @@ with st.expander("Notes / Definitions"):
 - Klik bar chart pada Rankings/Country view untuk otomatis memilih route (A→B).
 - Jika beberapa negara tidak muncul di daftar maskapai, biasanya karena beda penamaan negara → tambahkan mapping di `COUNTRY_ALIAS`.
 """
-    )def fmt_pct(x):
+    def fmt_pct(x):
     return "—" if pd.isna(x) else f"{x:.2f}%"
 
 def safe_div(a, b):
     if b is None or b == 0 or pd.isna(b):
         return np.nan
     return a / b
+    
 
 # =====================
 # LOAD DATA
