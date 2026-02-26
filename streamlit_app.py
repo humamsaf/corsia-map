@@ -585,16 +585,16 @@ Share of **subject-only** global total is **{fmt_pct(share_subject_all)}**.
 # FOOTER
 # =====================
 with st.expander("Notes / Definitions"):
-st.write(
-    """
+    st.write(
+        """
 - **All emissions**: subject + not subject (total international aviation CO₂ in dataset).
 - **CORSIA-subject only**: hanya baris yang `subject=True`.
-- **Country involvement**: outgoing + incoming (asal + tujuan). Ini lebih cocok untuk “negara paling dominan” di network.
-- **Airlines**: directory tambahan dari file attribution (ditampilkan sebagai info saja; tidak diklaim berkontribusi ke emisi).
+- **Country involvement**: outgoing + incoming (asal + tujuan).
+- **Airlines**: directory tambahan dari file attribution (info only).
 - Klik bar chart pada Rankings/Country view untuk otomatis memilih route (A→B).
-- Jika beberapa negara tidak muncul di daftar maskapai, biasanya karena beda penamaan negara → tambahkan mapping di `COUNTRY_ALIAS`.
-"""
-)
+- Jika beberapa negara tidak muncul di daftar maskapai, tambahkan mapping di `COUNTRY_ALIAS`.
+        """
+    )
 
 def fmt_pct(x):
     return "—" if pd.isna(x) else f"{x:.2f}%"
