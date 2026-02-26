@@ -90,61 +90,33 @@ map_col, panel_col = st.columns([1.2,1])
 # MAP
 # =====================
 with map_col:
-    fig_map = px.choropleth(
-        country_density,
-        locations="country",
-        locationmode="country names",
-        color="log_emissions",  # use log scale for readability
-        hover_name="country",
-        hover_data={
-            "emissions": ":,.0f",
-            "log_emissions": False
-        },
-        color_continuous_scale="YlOrRd",
-        labels={"log_emissions":"Emissions intensity (log)"},
+    dfm = pd.DataFrame({"country":countries})
+    dfm["role"] = dfm["country"].apply(
+        lambda c: "A" if c==st.session_state.A else "B" if c==st.session_state.B else "Other"
     )
 
-    fig_map.update_layout(
-        height=560,
-        margin=dict(l=10, r=10, t=10, b=10),
-        coloraxis_colorbar=dict(
-            title="tCO₂ (log scale)"
-        ),
+    fig = px.scatter_geo(
+        dfm, locations="country", locationmode="country names",
+        color="role", hover_name="country", custom_data=["country"]
     )
+    fig.update_traces(marker=dict(size=7))
+    fig.update_layout(height=560, margin=dict(l=10,r=10,t=10,b=10))
 
-    fig_map.update_geos(
-        showcountries=True,
-        showcoastlines=True,
-        projection_type="natural earth",
-    )
+    ev = st.plotly_chart(fig, on_select="rerun", selection_mode="points")
 
-    # Native Streamlit select
-    event = st.plotly_chart(
-        fig_map,
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="points",
-    )
-
-    if event and event["selection"]["points"]:
-        country_clicked = event["selection"]["points"][0]["location"]
-
+    if ev and ev["selection"]["points"]:
+        c = ev["selection"]["points"][0]["customdata"][0]
         if st.session_state.A is None:
-            st.session_state.A = country_clicked
-            st.rerun()
-        elif st.session_state.B is None:
-            if country_clicked != st.session_state.A:
-                st.session_state.B = country_clicked
-                st.rerun()
+            st.session_state.A=c
+        elif st.session_state.B is None and c!=st.session_state.A:
+            st.session_state.B=c
         else:
-            st.session_state.A = country_clicked
-            st.session_state.B = None
-            st.rerun()
+            st.session_state.A=c
+            st.session_state.B=None
+        st.rerun()
 
-    st.markdown(
-        f"**Selected:** A = `{st.session_state.A or '—'}` | "
-        f"B = `{st.session_state.B or '—'}`"
-    )
+    st.markdown(f"**Selected:** {st.session_state.A or '—'} → {st.session_state.B or '—'}")
+
 # =====================
 # PANEL
 # =====================
